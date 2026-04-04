@@ -648,6 +648,79 @@ flake8 app/
 pytest tests/
 ```
 
+### 🎯 We Welcome Contributors!
+
+Do you want to contribute? We'd love your help! Here are some ways you can contribute:
+
+- 🐛 **Report Bugs** — Found an issue? Open a GitHub issue with details
+- 💡 **Suggest Features** — Have an idea? Start a discussion
+- 📝 **Improve Docs** — Help us write better documentation
+- 🔧 **Submit Pull Requests** — Fix bugs or add features
+- 🧪 **Add Tests** — Help improve test coverage
+- 🌐 **Translate** — Add support for other languages
+
+**Get started:**
+```bash
+git clone https://github.com/prince-m2hgamerz/youtube-auto.git
+cd youtube-auto
+# Create your feature branch and submit a PR!
+```
+
+---
+
+## 💝 Support the Project
+
+If you find this project useful and want to support its development, consider:
+
+### Donate 💰
+
+Your donation helps us:
+- ✅ Continue development and maintenance
+- ✅ Add new features and improvements
+- ✅ Fix bugs and security issues
+- ✅ Improve documentation
+
+**Support options coming soon!** More payment methods will be added.
+
+### Other Ways to Support
+
+- ⭐ **Star this repository** — It helps others discover the project
+- 🔗 **Share** — Tell your friends and colleagues about YouTube Auto Bot
+- 📢 **Feedback** — Share your experience and suggestions
+- 🤝 **Contribute Code** — Submit pull requests and improvements
+
+---
+
+## 👨‍💻 About the Developer
+
+**YouTube Auto Bot** is created and maintained by **Prince Kumar** (M2H Gamerz)
+
+### 🔗 Connect With Me
+
+I'm passionate about building production-ready tools and helping developers learn modern Python patterns.
+
+- **📱 Telegram** — [@m2hgamerz](https://t.me/m2hgamerz) — Chat with me directly!
+- **📷 Instagram** — [@m2hgamerz](https://instagram.com/m2hgamerz) — Follow for updates
+- **💼 LinkedIn** — [Prince Kumar](https://www.linkedin.com/in/prince-kumar-m2h/) — Professional network
+- **🐙 GitHub** — [prince-m2hgamerz](https://github.com/prince-m2hgamerz/youtube-auto) — All my projects
+- **📧 Email** — Reach out for collaborations and partnerships
+
+### 🌟 Follow & Star
+
+If you find this project useful:
+- ⭐ **Star** the repo on GitHub
+- 🔔 **Follow** for updates and new releases
+- 💬 **Share** your thoughts and suggestions
+
+### 🤝 Collaboration
+
+Are you interested in:
+- 🚀 Collaborating on projects?
+- 📚 Building tutorials together?
+- 💼 Professional opportunities?
+
+**Reach out on any platform above!**
+
 ---
 
 ## 📄 License
