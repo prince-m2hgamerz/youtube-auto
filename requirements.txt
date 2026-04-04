@@ -1,0 +1,12 @@
+aiogram==3.27.0
+fastapi==0.110.0
+uvicorn[standard]==0.23.2
+python-dotenv==1.0.0
+google-auth==2.23.0
+google-auth-oauthlib==1.0.0
+google-api-python-client==2.90.0
+yt-dlp==2026.3.17
+cryptography==41.0.4
+pydantic==2.12.5
+pydantic-settings==2.13.1
+requests==2.31.0
