@@ -21,6 +21,7 @@ _COOKIE_FILE_CACHE: Path | None = None
 _YOUTUBE_BOT_CHECK_MSG = "Sign in to confirm you"
 _FORMAT_NOT_AVAILABLE_MSG = "Requested format is not available"
 _RATE_LIMIT_MSGS = ("HTTP Error 429", "Too Many Requests")
+_FFMPEG_MISSING_MSGS = ("ffmpeg is not installed", "ffprobe and ffmpeg not found")
 
 
 def _is_format_unavailable_error(error: Exception) -> bool:
@@ -30,6 +31,11 @@ def _is_format_unavailable_error(error: Exception) -> bool:
 def _is_rate_limited_error(error: Exception) -> bool:
     text = str(error)
     return any(marker in text for marker in _RATE_LIMIT_MSGS)
+
+
+def _is_ffmpeg_missing_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(marker in text for marker in _FFMPEG_MISSING_MSGS)
 
 
 def _resolve_cookie_file() -> str | None:
@@ -96,6 +102,10 @@ def _format_yt_dlp_error(prefix: str, error: Exception) -> ValueError:
     if _is_rate_limited_error(error):
         return ValueError(
             f"{prefix}: {error_text}. YouTube is rate-limiting this server IP. Retry later and keep cookies fresh."
+        )
+    if _is_ffmpeg_missing_error(error):
+        return ValueError(
+            f"{prefix}: {error_text}. ffmpeg is missing in runtime; install ffmpeg or use non-merge formats."
         )
     if _is_format_unavailable_error(error):
         return ValueError(
@@ -262,24 +272,27 @@ def download_video(video_url: str, output_dir: str) -> str:
     }
     _apply_youtube_auth_options(ydl_opts)
 
+    progressive_candidates = [
+        "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
+        "18/best[vcodec!=none][acodec!=none]",
+        "best",
+    ]
+    merge_candidates = [
+        "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+        "bestvideo+bestaudio/best[ext=mp4]/best",
+    ]
+
     format_candidates: list[str]
     if ffmpeg_path:
         ydl_opts["merge_output_format"] = "mp4"
         ydl_opts["ffmpeg_location"] = ffmpeg_path
-        format_candidates = [
-            "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
-            "bestvideo+bestaudio/best[ext=mp4]/best",
-            "best",
-        ]
+        # Prefer progressive formats first even when ffmpeg exists, then try merge formats.
+        format_candidates = [*progressive_candidates, *merge_candidates]
     else:
         # Fallback when ffmpeg is unavailable (common on minimal PaaS images):
         # download a single progressive stream that doesn't require merge.
         logger.warning("ffmpeg not found; using single-stream download format (lower max quality possible)")
-        format_candidates = [
-            "best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best",
-            "best[vcodec!=none][acodec!=none]/best",
-            "18/best",
-        ]
+        format_candidates = progressive_candidates
 
     last_error: Exception | None = None
     for fmt in format_candidates:
@@ -294,6 +307,10 @@ def download_video(video_url: str, output_dir: str) -> str:
                     return _resolve_downloaded_file(payload, ydl, output_dir_path)
             except Exception as exc:
                 last_error = exc
+                if _is_ffmpeg_missing_error(exc):
+                    logger.warning("ffmpeg unavailable while processing format %s; skipping merge-required formats", fmt)
+                    # Any format with '+' requires merge; move to next candidate.
+                    break
                 if _is_format_unavailable_error(exc):
                     logger.warning("Format selector failed, trying fallback: %s", fmt)
                     break
