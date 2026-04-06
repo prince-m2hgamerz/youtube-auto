@@ -1,4 +1,5 @@
 import requests
+import re
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
@@ -21,6 +22,11 @@ def _request(method: str, path: str, params: dict | None = None, json_body: Any 
     if response.text:
         return response.json()
     return None
+
+
+def _extract_missing_column(error_text: str) -> Optional[str]:
+    match = re.search(r"Could not find the '([^']+)' column", error_text)
+    return match.group(1) if match else None
 
 
 def get_user(telegram_id: str) -> Optional[Dict[str, Any]]:
@@ -51,8 +57,20 @@ def create_job(job: Dict[str, Any]) -> Dict[str, Any]:
 def update_job(job_id: int, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     headers = {"Prefer": "return=representation"}
     params = {"id": f"eq.{job_id}"}
-    data = _request("PATCH", "video_jobs", params=params, json_body=payload, extra_headers=headers)
-    return data[0] if data else None
+    try:
+        data = _request("PATCH", "video_jobs", params=params, json_body=payload, extra_headers=headers)
+        return data[0] if data else None
+    except RuntimeError as exc:
+        missing_column = _extract_missing_column(str(exc))
+        if not missing_column or missing_column not in payload:
+            raise
+
+        retry_payload = {k: v for k, v in payload.items() if k != missing_column}
+        if not retry_payload:
+            return None
+
+        data = _request("PATCH", "video_jobs", params=params, json_body=retry_payload, extra_headers=headers)
+        return data[0] if data else None
 
 
 def get_job(job_id: int) -> Optional[Dict[str, Any]]:

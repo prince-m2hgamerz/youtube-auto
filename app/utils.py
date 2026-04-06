@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -11,6 +12,7 @@ from yt_dlp import YoutubeDL
 from app.config import settings
 
 YOUTUBE_URL_PATTERN = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/).+"
+logger = logging.getLogger(__name__)
 
 
 def get_fernet() -> Fernet:
@@ -95,18 +97,23 @@ def download_video(video_url: str, output_dir: str) -> str:
                 continue
 
     ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": output_template,
-        "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": False,  # Show progress
         "no_warnings": False,
         "socket_timeout": 60,
         "http_chunk_size": 1024 * 1024,
     }
-    
+
     if ffmpeg_path:
+        ydl_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        ydl_opts["merge_output_format"] = "mp4"
         ydl_opts["ffmpeg_location"] = ffmpeg_path
+    else:
+        # Fallback when ffmpeg is unavailable (common on minimal PaaS images):
+        # download a single progressive stream that doesn't require merge.
+        ydl_opts["format"] = "best[ext=mp4]/best"
+        logger.warning("ffmpeg not found; using single-stream download format (lower max quality possible)")
 
     try:
         with YoutubeDL(ydl_opts) as ydl:

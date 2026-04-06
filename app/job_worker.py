@@ -78,7 +78,10 @@ def process_job(job_id: int) -> None:
         logger.info(f"Job {job_id} completed successfully: {result_url}")
     except Exception as exc:
         logger.error(f"Job {job_id} failed: {exc}", exc_info=True)
-        update_job(job_id, {"status": "failed", "error_message": str(exc)})
+        try:
+            update_job(job_id, {"status": "failed", "error_message": str(exc)})
+        except Exception as update_err:
+            logger.error(f"Failed to persist failed status for job {job_id}: {update_err}", exc_info=True)
         send_telegram_message(job["telegram_id"], f"❌ Upload failed: {exc}")
     finally:
         if 'video_path' in locals() and video_path:
@@ -121,3 +124,4 @@ def start_worker() -> None:
     logger.info(f"Found {len(pending)} pending jobs")
     for job in pending:
         enqueue_job(job["id"])
+
