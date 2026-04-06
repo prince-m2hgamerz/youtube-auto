@@ -1,9 +1,11 @@
+import base64
 import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -13,6 +15,61 @@ from app.config import settings
 
 YOUTUBE_URL_PATTERN = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/).+"
 logger = logging.getLogger(__name__)
+_COOKIE_FILE_CACHE: Path | None = None
+_YOUTUBE_BOT_CHECK_MSG = "Sign in to confirm you"
+
+
+def _resolve_cookie_file() -> str | None:
+    global _COOKIE_FILE_CACHE
+
+    if settings.youtube_cookies_file:
+        file_path = Path(settings.youtube_cookies_file).expanduser()
+        if file_path.exists():
+            return str(file_path)
+        logger.warning("YOUTUBE_COOKIES_FILE was set but file not found: %s", file_path)
+
+    if _COOKIE_FILE_CACHE and _COOKIE_FILE_CACHE.exists():
+        return str(_COOKIE_FILE_CACHE)
+
+    cookie_data: str | None = None
+    if settings.youtube_cookies:
+        cookie_data = settings.youtube_cookies.strip()
+    elif settings.youtube_cookies_base64:
+        try:
+            cookie_data = base64.b64decode(settings.youtube_cookies_base64).decode("utf-8").strip()
+        except Exception as exc:
+            logger.error("Failed to decode YOUTUBE_COOKIES_BASE64: %s", exc)
+            return None
+
+    if not cookie_data:
+        return None
+
+    cookie_dir = Path(tempfile.gettempdir()) / "youtube-auto"
+    cookie_dir.mkdir(parents=True, exist_ok=True)
+    cookie_file = cookie_dir / "youtube-cookies.txt"
+    cookie_file.write_text(f"{cookie_data}\n", encoding="utf-8")
+    _COOKIE_FILE_CACHE = cookie_file
+    return str(cookie_file)
+
+
+def _apply_youtube_auth_options(options: dict) -> None:
+    # Prefer clients that commonly avoid stricter web anti-bot checks.
+    options["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+    cookie_file = _resolve_cookie_file()
+    if cookie_file:
+        options["cookiefile"] = cookie_file
+
+
+def _format_yt_dlp_error(prefix: str, error: Exception) -> ValueError:
+    error_text = str(error)
+    if _YOUTUBE_BOT_CHECK_MSG in error_text:
+        cookie_file = _resolve_cookie_file()
+        if cookie_file:
+            return ValueError(f"{prefix}: {error_text}")
+        return ValueError(
+            f"{prefix}: {error_text} Configure YOUTUBE_COOKIES_FILE or YOUTUBE_COOKIES_BASE64 in Railway."
+        )
+    return ValueError(f"{prefix}: {error_text}")
 
 
 def get_fernet() -> Fernet:
@@ -62,6 +119,7 @@ def extract_video_info(video_url: str) -> dict:
         "socket_timeout": 30,
         "http_chunk_size": 1024 * 1024,
     }
+    _apply_youtube_auth_options(options)
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(video_url, download=False)
@@ -72,7 +130,7 @@ def extract_video_info(video_url: str) -> dict:
             "description": info.get("description", ""),
         }
     except Exception as e:
-        raise ValueError(f"Failed to extract video info: {str(e)}")
+        raise _format_yt_dlp_error("Failed to extract video info", e)
 
 
 def download_video(video_url: str, output_dir: str) -> str:
@@ -104,6 +162,7 @@ def download_video(video_url: str, output_dir: str) -> str:
         "socket_timeout": 60,
         "http_chunk_size": 1024 * 1024,
     }
+    _apply_youtube_auth_options(ydl_opts)
 
     if ffmpeg_path:
         ydl_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
@@ -125,7 +184,7 @@ def download_video(video_url: str, output_dir: str) -> str:
                 raise ValueError(f"Downloaded file not found: {filename}")
         return filename
     except Exception as e:
-        raise ValueError(f"Download failed: {str(e)}")
+        raise _format_yt_dlp_error("Download failed", e)
 
 
 def remove_file(path: str) -> None:

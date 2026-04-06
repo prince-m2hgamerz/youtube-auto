@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     oauth_redirect_uri: AnyUrl
     base_url: AnyUrl
     environment: str = "development"
+    youtube_cookies_file: str | None = None
+    youtube_cookies_base64: str | None = None
+    youtube_cookies: str | None = None
 
     @validator("secret_key")
     def validate_secret_key(cls, value: str) -> str:
