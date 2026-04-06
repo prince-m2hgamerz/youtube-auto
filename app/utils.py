@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -19,10 +20,16 @@ logger = logging.getLogger(__name__)
 _COOKIE_FILE_CACHE: Path | None = None
 _YOUTUBE_BOT_CHECK_MSG = "Sign in to confirm you"
 _FORMAT_NOT_AVAILABLE_MSG = "Requested format is not available"
+_RATE_LIMIT_MSGS = ("HTTP Error 429", "Too Many Requests")
 
 
 def _is_format_unavailable_error(error: Exception) -> bool:
     return _FORMAT_NOT_AVAILABLE_MSG in str(error)
+
+
+def _is_rate_limited_error(error: Exception) -> bool:
+    text = str(error)
+    return any(marker in text for marker in _RATE_LIMIT_MSGS)
 
 
 def _resolve_cookie_file() -> str | None:
@@ -59,8 +66,26 @@ def _resolve_cookie_file() -> str | None:
 
 
 def _apply_youtube_auth_options(options: dict) -> None:
-    # Prefer clients that commonly avoid stricter web anti-bot checks.
-    options["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
+    youtube_args: dict[str, list[str]] = {
+        # Include formats that may be tagged as missing POT; without this, yt-dlp can
+        # end up exposing only storyboard/image formats on some YouTube responses.
+        "formats": ["missing_pot"],
+        # Ask yt-dlp to fetch PO tokens when needed.
+        "fetch_pot": ["always"],
+    }
+    if settings.youtube_po_token:
+        youtube_args["po_token"] = [settings.youtube_po_token]
+
+    options["extractor_args"] = {"youtube": youtube_args}
+    options["js_runtimes"] = {
+        "node": {"path": settings.youtube_js_runtime_path} if settings.youtube_js_runtime_path else {},
+    }
+    # Allow yt-dlp to fetch EJS challenge solver scripts.
+    options["remote_components"] = {"ejs:github", "ejs:npm"}
+    options["extractor_retries"] = 5
+    options["retries"] = 5
+    options["fragment_retries"] = 5
+
     cookie_file = _resolve_cookie_file()
     if cookie_file:
         options["cookiefile"] = cookie_file
@@ -68,6 +93,10 @@ def _apply_youtube_auth_options(options: dict) -> None:
 
 def _format_yt_dlp_error(prefix: str, error: Exception) -> ValueError:
     error_text = str(error)
+    if _is_rate_limited_error(error):
+        return ValueError(
+            f"{prefix}: {error_text}. YouTube is rate-limiting this server IP. Retry later and keep cookies fresh."
+        )
     if _is_format_unavailable_error(error):
         return ValueError(
             f"{prefix}: {error_text}. Tried alternate download formats but none were available for this video."
@@ -189,18 +218,30 @@ def extract_video_info(video_url: str) -> dict:
         "http_chunk_size": 1024 * 1024,
     }
     _apply_youtube_auth_options(options)
-    try:
-        with YoutubeDL(options) as ydl:
-            info = ydl.extract_info(video_url, download=False, process=False)
-        payload = _extract_video_payload(info)
-        if payload is None:
-            raise ValueError("Unable to fetch YouTube metadata - video not found or private")
-        return {
-            "title": payload.get("title", "Untitled video"),
-            "description": payload.get("description", ""),
-        }
-    except Exception as e:
-        raise _format_yt_dlp_error("Failed to extract video info", e)
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with YoutubeDL(options) as ydl:
+                info = ydl.extract_info(video_url, download=False, process=False)
+            payload = _extract_video_payload(info)
+            if payload is None:
+                raise ValueError("Unable to fetch YouTube metadata - video not found or private")
+            return {
+                "title": payload.get("title", "Untitled video"),
+                "description": payload.get("description", ""),
+            }
+        except Exception as exc:
+            last_error = exc
+            if _is_rate_limited_error(exc) and attempt < 2:
+                wait_seconds = 2 * (attempt + 1)
+                logger.warning("YouTube metadata request hit 429; retrying in %ss", wait_seconds)
+                time.sleep(wait_seconds)
+                continue
+            raise _format_yt_dlp_error("Failed to extract video info", exc)
+
+    if last_error is not None:
+        raise _format_yt_dlp_error("Failed to extract video info", last_error)
+    raise ValueError("Failed to extract video info")
 
 
 def download_video(video_url: str, output_dir: str) -> str:
@@ -242,20 +283,29 @@ def download_video(video_url: str, output_dir: str) -> str:
 
     last_error: Exception | None = None
     for fmt in format_candidates:
-        attempt_opts = {**ydl_opts, "format": fmt}
-        try:
-            with YoutubeDL(attempt_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                payload = _extract_video_payload(info)
-                if payload is None:
-                    raise ValueError("Download failed - no video info")
-                return _resolve_downloaded_file(payload, ydl, output_dir_path)
-        except Exception as exc:
-            last_error = exc
-            if _is_format_unavailable_error(exc):
-                logger.warning("Format selector failed, trying fallback: %s", fmt)
-                continue
-            raise _format_yt_dlp_error("Download failed", exc)
+        for attempt in range(3):
+            attempt_opts = {**ydl_opts, "format": fmt}
+            try:
+                with YoutubeDL(attempt_opts) as ydl:
+                    info = ydl.extract_info(video_url, download=True)
+                    payload = _extract_video_payload(info)
+                    if payload is None:
+                        raise ValueError("Download failed - no video info")
+                    return _resolve_downloaded_file(payload, ydl, output_dir_path)
+            except Exception as exc:
+                last_error = exc
+                if _is_format_unavailable_error(exc):
+                    logger.warning("Format selector failed, trying fallback: %s", fmt)
+                    break
+                if _is_rate_limited_error(exc) and attempt < 2:
+                    wait_seconds = 2 * (attempt + 1)
+                    logger.warning("YouTube download hit 429 for format %s; retrying in %ss", fmt, wait_seconds)
+                    time.sleep(wait_seconds)
+                    continue
+                if _is_rate_limited_error(exc):
+                    logger.warning("YouTube kept rate-limiting format %s; moving to fallback format", fmt)
+                    break
+                raise _format_yt_dlp_error("Download failed", exc)
 
     if last_error is not None:
         raise _format_yt_dlp_error("Download failed", last_error)
