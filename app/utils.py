@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,11 @@ YOUTUBE_URL_PATTERN = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)
 logger = logging.getLogger(__name__)
 _COOKIE_FILE_CACHE: Path | None = None
 _YOUTUBE_BOT_CHECK_MSG = "Sign in to confirm you"
+_FORMAT_NOT_AVAILABLE_MSG = "Requested format is not available"
+
+
+def _is_format_unavailable_error(error: Exception) -> bool:
+    return _FORMAT_NOT_AVAILABLE_MSG in str(error)
 
 
 def _resolve_cookie_file() -> str | None:
@@ -62,6 +68,10 @@ def _apply_youtube_auth_options(options: dict) -> None:
 
 def _format_yt_dlp_error(prefix: str, error: Exception) -> ValueError:
     error_text = str(error)
+    if _is_format_unavailable_error(error):
+        return ValueError(
+            f"{prefix}: {error_text}. Tried alternate download formats but none were available for this video."
+        )
     if _YOUTUBE_BOT_CHECK_MSG in error_text:
         cookie_file = _resolve_cookie_file()
         if cookie_file:
@@ -70,6 +80,64 @@ def _format_yt_dlp_error(prefix: str, error: Exception) -> ValueError:
             f"{prefix}: {error_text} Configure YOUTUBE_COOKIES_FILE or YOUTUBE_COOKIES_BASE64 in Railway."
         )
     return ValueError(f"{prefix}: {error_text}")
+
+
+def _detect_ffmpeg() -> str | None:
+    candidates: list[str] = []
+    env_path = os.getenv("FFMPEG_BINARY")
+    if env_path:
+        candidates.append(env_path)
+
+    if os.name == "nt":
+        candidates.append(
+            r"C:\Users\m2hga\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe"
+        )
+
+    candidates.append("ffmpeg")
+
+    for candidate in candidates:
+        try:
+            subprocess.run([candidate, "-version"], capture_output=True, check=True, timeout=5)
+            return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _extract_video_payload(info: dict | None) -> dict | None:
+    if info is None:
+        return None
+    entries = info.get("entries")
+    if entries:
+        for item in entries:
+            if item:
+                return item
+        return None
+    return info
+
+
+def _resolve_downloaded_file(info: dict, ydl: YoutubeDL, output_dir: Path) -> str:
+    candidates: list[Path] = []
+
+    try:
+        candidates.append(Path(ydl.prepare_filename(info)))
+    except Exception:
+        pass
+
+    for item in info.get("requested_downloads") or []:
+        filepath = item.get("filepath")
+        if filepath:
+            candidates.append(Path(filepath))
+
+    video_id = info.get("id")
+    if video_id:
+        candidates.extend(output_dir.glob(f"{video_id}.*"))
+
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return str(path)
+
+    raise ValueError("Downloaded file not found after extraction")
 
 
 def get_fernet() -> Fernet:
@@ -115,6 +183,7 @@ def extract_video_info(video_url: str) -> dict:
         "quiet": False,  # Show errors
         "skip_download": True,
         "ignoreerrors": False,  # Raise on errors
+        "ignoreconfig": True,  # Ignore host-level yt-dlp config that may enforce incompatible formats
         "no_warnings": False,
         "socket_timeout": 30,
         "http_chunk_size": 1024 * 1024,
@@ -122,12 +191,13 @@ def extract_video_info(video_url: str) -> dict:
     _apply_youtube_auth_options(options)
     try:
         with YoutubeDL(options) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-        if info is None:
+            info = ydl.extract_info(video_url, download=False, process=False)
+        payload = _extract_video_payload(info)
+        if payload is None:
             raise ValueError("Unable to fetch YouTube metadata - video not found or private")
         return {
-            "title": info.get("title", "Untitled video"),
-            "description": info.get("description", ""),
+            "title": payload.get("title", "Untitled video"),
+            "description": payload.get("description", ""),
         }
     except Exception as e:
         raise _format_yt_dlp_error("Failed to extract video info", e)
@@ -138,53 +208,58 @@ def download_video(video_url: str, output_dir: str) -> str:
     output_dir_path.mkdir(parents=True, exist_ok=True)
     output_template = str(output_dir_path / "%(id)s.%(ext)s")
 
-    # Find ffmpeg executable
-    ffmpeg_path = None
-    possible_paths = [
-        r"C:\Users\m2hga\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe",
-        "ffmpeg",  # If in PATH
-    ]
-    for path in possible_paths:
-        if Path(path).exists() or path == "ffmpeg":
-            try:
-                import subprocess
-                subprocess.run([path, "-version"], capture_output=True, check=True)
-                ffmpeg_path = path
-                break
-            except:
-                continue
+    ffmpeg_path = _detect_ffmpeg()
 
     ydl_opts = {
         "outtmpl": output_template,
         "noplaylist": True,
         "quiet": False,  # Show progress
         "no_warnings": False,
+        "ignoreconfig": True,  # Ignore host-level yt-dlp config that may force unavailable formats
         "socket_timeout": 60,
         "http_chunk_size": 1024 * 1024,
     }
     _apply_youtube_auth_options(ydl_opts)
 
+    format_candidates: list[str]
     if ffmpeg_path:
-        ydl_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
         ydl_opts["merge_output_format"] = "mp4"
         ydl_opts["ffmpeg_location"] = ffmpeg_path
+        format_candidates = [
+            "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+            "bestvideo+bestaudio/best[ext=mp4]/best",
+            "best",
+        ]
     else:
         # Fallback when ffmpeg is unavailable (common on minimal PaaS images):
         # download a single progressive stream that doesn't require merge.
-        ydl_opts["format"] = "best[ext=mp4]/best"
         logger.warning("ffmpeg not found; using single-stream download format (lower max quality possible)")
+        format_candidates = [
+            "best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best",
+            "best[vcodec!=none][acodec!=none]/best",
+            "18/best",
+        ]
 
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            if info is None:
-                raise ValueError("Download failed - no video info")
-            filename = ydl.prepare_filename(info)
-            if not Path(filename).exists():
-                raise ValueError(f"Downloaded file not found: {filename}")
-        return filename
-    except Exception as e:
-        raise _format_yt_dlp_error("Download failed", e)
+    last_error: Exception | None = None
+    for fmt in format_candidates:
+        attempt_opts = {**ydl_opts, "format": fmt}
+        try:
+            with YoutubeDL(attempt_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                payload = _extract_video_payload(info)
+                if payload is None:
+                    raise ValueError("Download failed - no video info")
+                return _resolve_downloaded_file(payload, ydl, output_dir_path)
+        except Exception as exc:
+            last_error = exc
+            if _is_format_unavailable_error(exc):
+                logger.warning("Format selector failed, trying fallback: %s", fmt)
+                continue
+            raise _format_yt_dlp_error("Download failed", exc)
+
+    if last_error is not None:
+        raise _format_yt_dlp_error("Download failed", last_error)
+    raise ValueError("Download failed: no compatible format found")
 
 
 def remove_file(path: str) -> None:

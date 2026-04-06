@@ -1,4 +1,5 @@
 import json
+import mimetypes
 from typing import Dict
 
 from google.oauth2.credentials import Credentials
@@ -81,7 +82,8 @@ def upload_video(youtube, filepath: str, title: str, description: str, visibilit
             "privacyStatus": visibility,
         },
     }
-    media = MediaFileUpload(filepath, chunksize=-1, resumable=True, mimetype="video/mp4")
+    guessed_mime, _ = mimetypes.guess_type(filepath)
+    media = MediaFileUpload(filepath, chunksize=-1, resumable=True, mimetype=guessed_mime or "application/octet-stream")
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
     while response is None:
