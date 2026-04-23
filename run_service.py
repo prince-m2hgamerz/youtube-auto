@@ -1,57 +1,35 @@
-import signal
-import subprocess
-import sys
-import time
-from typing import Dict
+"""Combined runner for Railway deployment — starts both the API server and the Telegram bot."""
+import asyncio
+import threading
+import logging
+
+import uvicorn
+
+from app.api import app as fastapi_app
+from app.bot import start_bot
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+API_HOST = "0.0.0.0"
+API_PORT = 8000
 
 
-CHILDREN: Dict[str, subprocess.Popen] = {}
+def _run_api():
+    logger.info(f"Starting API server on {API_HOST}:{API_PORT}")
+    uvicorn.run(fastapi_app, host=API_HOST, port=API_PORT, log_level="info")
 
 
-def terminate_children() -> None:
-    for process in CHILDREN.values():
-        if process.poll() is None:
-            process.terminate()
+def main():
+    logger.info("=== Starting YouTube Auto Bot Service ===")
 
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if all(process.poll() is not None for process in CHILDREN.values()):
-            return
-        time.sleep(0.2)
+    # Start FastAPI in a background thread so bot + API run together
+    api_thread = threading.Thread(target=_run_api, daemon=True)
+    api_thread.start()
 
-    for process in CHILDREN.values():
-        if process.poll() is None:
-            process.kill()
-
-
-def handle_signal(signum, _frame) -> None:
-    print(f"Received signal {signum}. Stopping web and worker processes...")
-    terminate_children()
-    sys.exit(0)
-
-
-def main() -> None:
-    commands = {
-        "web": [sys.executable, "run_api.py"],
-        "worker": [sys.executable, "run_bot.py"],
-    }
-
-    for name, command in commands.items():
-        print(f"Starting {name}: {' '.join(command)}")
-        CHILDREN[name] = subprocess.Popen(command)
-
-    while True:
-        for name, process in CHILDREN.items():
-            exit_code = process.poll()
-            if exit_code is not None:
-                print(f"{name} exited with code {exit_code}. Shutting down service...")
-                terminate_children()
-                # Exit non-zero so Railway restarts the container.
-                sys.exit(exit_code if exit_code != 0 else 1)
-        time.sleep(1)
+    # Start the Telegram bot (this blocks with asyncio.run)
+    start_bot()
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
     main()

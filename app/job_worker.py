@@ -8,7 +8,8 @@ from typing import Optional
 import requests
 
 from app.config import settings
-from app.supabase_client import get_job, get_pending_jobs, get_user, update_job
+from app.scheduler import start_scheduler
+from app.supabase_client import get_job, get_pending_jobs, get_user, update_job, update_user_settings
 from app.utils import download_video, remove_file, validate_youtube_url
 from app.youtube_client import build_youtube_service, deserialize_credentials, upload_video
 
@@ -78,11 +79,25 @@ def process_job(job_id: int) -> None:
         logger.info(f"Job {job_id} completed successfully: {result_url}")
     except Exception as exc:
         logger.error(f"Job {job_id} failed: {exc}", exc_info=True)
+        error_text = str(exc)
         try:
-            update_job(job_id, {"status": "failed", "error_message": str(exc)})
+            update_job(job_id, {"status": "failed", "error_message": error_text})
         except Exception as update_err:
             logger.error(f"Failed to persist failed status for job {job_id}: {update_err}", exc_info=True)
-        send_telegram_message(job["telegram_id"], f"❌ Upload failed: {exc}")
+
+        # Detect expired/revoked OAuth token and give a clear message
+        if "invalid_grant" in error_text or "expired or revoked" in error_text:
+            try:
+                update_user_settings(job["telegram_id"], {"is_connected": False, "oauth_credentials": None})
+            except Exception as disconnect_err:
+                logger.error(f"Failed to auto-disconnect user {job['telegram_id']}: {disconnect_err}")
+            send_telegram_message(
+                job["telegram_id"],
+                "🔒 Your YouTube connection has expired or been revoked.\n\n"
+                "Please reconnect your account using /connect",
+            )
+        else:
+            send_telegram_message(job["telegram_id"], f"❌ Upload failed: {exc}")
     finally:
         if 'video_path' in locals() and video_path:
             try:
@@ -119,9 +134,18 @@ def start_worker() -> None:
     worker_thread.start()
     logger.info("Worker thread started")
     
+    # Start the auto-upload scheduler for source-channel shorts
+    try:
+        start_scheduler()
+    except Exception as exc:
+        logger.error(f"Failed to start scheduler: {exc}", exc_info=True)
+    
     # Requeue any pending jobs
-    pending = get_pending_jobs()
-    logger.info(f"Found {len(pending)} pending jobs")
-    for job in pending:
-        enqueue_job(job["id"])
+    try:
+        pending = get_pending_jobs()
+        logger.info(f"Found {len(pending)} pending jobs")
+        for job in pending:
+            enqueue_job(job["id"])
+    except Exception as exc:
+        logger.error(f"Failed to load pending jobs from Supabase: {exc}")
 

@@ -15,7 +15,7 @@ from yt_dlp import YoutubeDL
 
 from app.config import settings
 
-YOUTUBE_URL_PATTERN = r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/).+"
+YOUTUBE_URL_PATTERN = r"^(https?://)?(www\.)?(youtube\.com/(watch\?v=|shorts/)|youtu\.be/).+"
 logger = logging.getLogger(__name__)
 _COOKIE_FILE_CACHE: Path | None = None
 _YOUTUBE_BOT_CHECK_MSG = "Sign in to confirm you"

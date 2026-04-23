@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     telegram_token: str
     supabase_url: AnyUrl
     supabase_service_key: str
+    admin_ids: str | None = None
     secret_key: str
     google_client_id: str
     google_client_secret: str
@@ -17,6 +18,13 @@ class Settings(BaseSettings):
     youtube_cookies: str | None = None
     youtube_js_runtime_path: str | None = None
     youtube_po_token: str | None = None
+    payment_currency: str = "XTR"
+    payment_provider_token: str | None = None
+    paid_plan_price: int = 150
+    paid_plan_duration_days: int = 30
+    donation_price: int = 50
+    paid_plan_title: str = "YouTube Auto Paid Plan"
+    paid_plan_description: str = "Unlock higher limits and public visibility uploads."
 
     @validator("secret_key")
     def validate_secret_key(cls, value: str) -> str:

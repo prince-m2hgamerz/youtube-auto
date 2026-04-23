@@ -1,4 +1,4 @@
-# 🎬 YouTube Auto Bot
+﻿# 🎬 YouTube Auto Bot
 
 > **Automate YouTube video uploads with Telegram** — A full-stack bot for downloading YouTube videos and uploading them to your YouTube channel with customizable metadata.
 
@@ -79,8 +79,8 @@ graph TB
         Broadcast["📢 broadcast_targets"]
     end
     
-    User -->|"/start, /download, /profile"| Bot
-    Admin -->|"/admin, /settings, /broadcast"| Bot
+    User -->|"/start, /download, /status"| Bot
+    Admin -->|"/admin, /setplan, /broadcast"| Bot
     Bot -->|FSM State| FSM
     Bot -->|CRUD Operations| Database
     API -->|OAuth Callback| Google
@@ -101,7 +101,7 @@ graph TB
 ### 🎬 Core Download & Upload
 - **One-command video downloads** with `/download <url>`
 - **Metadata editing** — customize title, description, visibility
-- **Batch processing** — queue unlimited videos
+- **Batch processing** — queue multiple videos with configurable plan limits
 - **Progress tracking** — real-time job status updates
 
 ### 🔐 Authentication & Security
@@ -166,7 +166,7 @@ graph TB
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/youtube-auto.git
+git clone https://github.com/prince-m2hgamerz/youtube-auto.git
 cd youtube-auto
 
 # Create virtual environment
@@ -277,6 +277,18 @@ OAUTH_REDIRECT_URI=http://localhost:8000/oauth2callback
 # 🌐 Application URLs
 BASE_URL=http://localhost:8000
 ENVIRONMENT=development
+ADMIN_IDS=123456789
+
+# 💳 Telegram Payments
+# Use XTR for Telegram Stars (official in-app currency)
+PAYMENT_CURRENCY=XTR
+# Keep empty for XTR, set BotFather payment provider token for fiat currencies
+PAYMENT_PROVIDER_TOKEN=
+PAID_PLAN_PRICE=150
+PAID_PLAN_DURATION_DAYS=30
+DONATION_PRICE=50
+PAID_PLAN_TITLE=YouTube Auto Paid Plan
+PAID_PLAN_DESCRIPTION=Unlock higher limits and public visibility uploads.
 ```
 
 ### Generating Encryption Key
@@ -295,6 +307,18 @@ Copy the output to `SECRET_KEY` in `.env`. Must be exactly 44 URL-safe base64 ch
 4. Create **OAuth 2.0 Client ID** (Desktop Application)
 5. Download credentials → Extract `client_id` and `client_secret`
 6. Add authorized redirect URI: `https://your-domain.com/oauth2callback`
+
+### Telegram Payments Setup
+
+Official docs: https://core.telegram.org/bots/api#payments
+
+1. Open **@BotFather** for your bot and configure payments.
+2. Choose one of:
+   - **Telegram Stars**: set `PAYMENT_CURRENCY=XTR`, leave `PAYMENT_PROVIDER_TOKEN` empty.
+   - **Fiat provider** (Stripe/other supported): set `PAYMENT_CURRENCY` to provider currency and set `PAYMENT_PROVIDER_TOKEN`.
+3. Deploy env vars and restart bot service.
+4. In Telegram, run `/buy` and complete payment flow.
+5. After successful payment, bot auto-activates paid plan and updates limits.
 
 ---
 
@@ -431,7 +455,7 @@ youtube-auto/
 ├── 📂 app/
 │   ├── __init__.py                 # Package marker
 │   ├── bot.py                      # 🤖 Main bot logic (1050+ lines)
-│   │   ├── Commands: /start, /connect, /download, /profile, /status, /dashboard, /admin
+│   │   ├── Commands: /start, /help, /connect, /download, /queue, /buy, /donate, /status, /dashboard, /admin
 │   │   ├── FSM States: DownloadState, UserSettingsState, AdminSettingsState, BroadcastState
 │   │   ├── Handlers: Callback routing, message handling, state transitions
 │   │   └── Dashboards: User & admin interactive interfaces
@@ -478,7 +502,7 @@ youtube-auto/
 ### Key Modules Explained
 
 #### `bot.py` — Core Bot Logic
-- **Commands**: /start, /connect, /download, /profile, /status, /dashboard, /admin
+- **Commands**: /start, /help, /connect, /download, /queue, /buy, /donate, /cancel, /status, /dashboard, /admin
 - **FSM States**: Stateful dialog flows for multi-step operations
 - **Handlers**: Message/callback routing with authorization checks
 - **Dashboards**: Interactive user and admin views with live data
@@ -504,15 +528,48 @@ youtube-auto/
 
 ## 📝 Command Reference
 
-| Command | Usage | Role | Description |
-|---------|-------|------|-------------|
-| `/start` | `/start` | Any | Welcome message & getting started |
-| `/connect` | `/connect` | Any | OAuth link to YouTube channel |
-| `/download` | `/download <url>` | Any | Start video upload workflow |
-| `/profile` | `/profile` | Any | View profile, upload history |
-| `/status` | `/status` | Any | Check job status by ID |
-| `/dashboard` | `/dashboard` | Any | Interactive user dashboard |
-| `/admin` | `/admin` | Admin | Admin control panel |
+### User Commands
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/start` | `/start` | Quick onboarding and account status |
+| `/help` | `/help` | Full command help |
+| `/connect` | `/connect` | Get OAuth link to connect YouTube |
+| `/download` | `/download <url>` | Start download/upload workflow |
+| `/queue` | `/queue` | Show active jobs and queue usage |
+| `/cancel` | `/cancel <job_id>` | Cancel a draft or pending job |
+| `/abort` | `/abort` | Cancel current metadata flow |
+| `/status` | `/status` | Show recent jobs with status and links |
+| `/profile` | `/profile` | Show user profile and upload stats |
+| `/dashboard` | `/dashboard` | Open inline dashboard |
+| `/myplan` | `/myplan` | Show your plan usage summary |
+| `/plans` | `/plans` | Compare free vs paid limits |
+| `/limits` | `/limits` | Show limits applied to your account |
+| `/buy` | `/buy` | Open official Telegram payment invoice for paid plan |
+| `/donate` | `/donate` | Send support donation via Telegram Payments |
+| `/upgrade` | `/upgrade` | Paid plan upgrade instructions |
+
+### Admin Commands
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `/admin` | `/admin` | Open admin dashboard |
+| `/adminhelp` | `/adminhelp` | Admin command reference |
+| `/setplan` | `/setplan <telegram_id> <free|paid>` | Change a user plan |
+| `/setlimits` | `/setlimits <free_daily> <paid_daily> <free_pending> <paid_pending>` | Update global limits |
+| `/userlookup` | `/userlookup <telegram_id>` | Show user plan/usage snapshot |
+| `/adminstats` | `/adminstats` | Show global bot/user/job statistics |
+| `/adminusers` | `/adminusers` | List recent users and plan state |
+| `/adminjobs` | `/adminjobs` | List recent jobs with status |
+| `/admincancel` | `/admincancel <job_id>` | Cancel a draft/pending job |
+| `/adminretry` | `/adminretry <job_id>` | Requeue non-completed job |
+| `/broadcast` | `/broadcast` | Start broadcast mode |
+
+### Plan Limits
+
+- Free users: limited daily jobs and queue size, visibility restricted to `unlisted` and `private`.
+- Paid users: higher daily/queue limits, plus `public` visibility.
+- Limits are read from `app_settings` keys: `free_daily_limit`, `paid_daily_limit`, `free_max_pending_jobs`, `paid_max_pending_jobs`, `paid_user_ids`, `paid_user_expiry`.
 
 ### FSM Workflows
 
@@ -598,6 +655,17 @@ CREATE TABLE app_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+
+Recommended `app_settings` keys for plan control:
+
+- `free_daily_limit`
+- `paid_daily_limit`
+- `free_max_pending_jobs`
+- `paid_max_pending_jobs`
+- `paid_user_ids` (comma-separated Telegram IDs)
+- `paid_user_expiry` (JSON map: telegram_id -> ISO datetime)
+
+If `app_settings` table is missing, the bot now falls back to in-memory settings so admin commands do not crash, but those settings are not persistent across restarts. Create this table for production persistence.
 
 ### broadcast_targets table
 
@@ -727,12 +795,6 @@ Are you interested in:
 
 This project is licensed under the **MIT License** — see [LICENSE](LICENSE) file for details.
 
-- `/start`
-- `/connect`
-- `/download <YouTube URL>`
-
-The bot will ask you to confirm or edit title/description and visibility before uploading.
-
 ## Project Structure
 
 - `app/api.py` — FastAPI OAuth callback and health check
@@ -755,3 +817,4 @@ The bot will ask you to confirm or edit title/description and visibility before 
 - If uploads fail, verify OAuth credentials and refresh token settings.
 - If `yt-dlp` fails, ensure `ffmpeg` is installed and the URL is valid.
 - Check logs in the `worker` and `bot` services for detailed errors.
+
