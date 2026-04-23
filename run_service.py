@@ -11,8 +11,10 @@ from app.bot import start_bot
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+import os
+
 API_HOST = "0.0.0.0"
-API_PORT = 8000
+API_PORT = int(os.environ.get("PORT", 8000))
 
 
 def _run_api():

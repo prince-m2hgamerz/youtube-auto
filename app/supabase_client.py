@@ -339,45 +339,65 @@ def create_broadcast_record(admin_id: str, content: str, sent_count: int, failed
         return None
 
 
-# ── Persistent bot settings stored in admin's user row ──
+# ── Persistent bot settings stored in dedicated bot_settings table ──
 
 _LOCAL_BOT_SETTINGS: Dict[str, Any] = {}
+_BOT_SETTINGS_TABLE = "bot_settings"
 
 
-def _get_admin_id() -> str:
-    return str(settings.admin_ids or "").split(",")[0].strip() if settings.admin_ids else ""
+def _get_bot_setting(name: str) -> Any:
+    try:
+        params = {"setting_name": f"eq.{name}", "select": "setting_value"}
+        data = _request("GET", _BOT_SETTINGS_TABLE, params=params)
+        if data:
+            return data[0].get("setting_value")
+    except Exception as exc:
+        logger.warning(f"Failed to read bot_setting {name}: {exc}")
+    return None
+
+
+def _set_bot_setting(name: str, value: Any) -> None:
+    payload = {"setting_name": name, "setting_value": json.dumps(value) if value is not None else None}
+    headers = {"Prefer": "return=representation,resolution=merge-duplicates"}
+    params = {"on_conflict": "setting_name"}
+    try:
+        _request_with_missing_column_retry("POST", _BOT_SETTINGS_TABLE, params=params, json_body=[payload], extra_headers=headers)
+    except Exception as exc:
+        logger.warning(f"Failed to write bot_setting {name}: {exc}")
 
 
 def get_bot_settings() -> Dict[str, Any]:
-    admin_id = _get_admin_id()
-    if not admin_id:
-        return dict(_LOCAL_BOT_SETTINGS)
     try:
-        user = get_user(admin_id)
-        if user:
-            for key in ("source_channel_url", "auto_upload_visibility", "auto_upload_times", "uploaded_shorts_ids"):
-                val = user.get(key)
-                if val is not None:
-                    _LOCAL_BOT_SETTINGS[key] = val
+        params = {"select": "setting_name,setting_value"}
+        rows = _request("GET", _BOT_SETTINGS_TABLE, params=params) or []
+        for row in rows:
+            name = row.get("setting_name")
+            raw = row.get("setting_value")
+            if not name:
+                continue
+            if isinstance(raw, str):
+                try:
+                    _LOCAL_BOT_SETTINGS[name] = json.loads(raw)
+                except Exception:
+                    _LOCAL_BOT_SETTINGS[name] = raw
+            else:
+                _LOCAL_BOT_SETTINGS[name] = raw
     except Exception as exc:
-        logger.warning(f"Failed to load bot settings from user row: {exc}")
+        logger.warning(f"Failed to load bot_settings: {exc}")
     return dict(_LOCAL_BOT_SETTINGS)
 
 
 def set_bot_settings(settings_payload: Dict[str, Any]) -> None:
     _LOCAL_BOT_SETTINGS.update(settings_payload)
-    admin_id = _get_admin_id()
-    if not admin_id:
-        logger.warning("No admin ID configured; settings kept in memory only")
-        return
-    try:
-        update_user_settings(admin_id, settings_payload)
-        logger.info(f"Bot settings persisted for admin {admin_id}")
-    except Exception as exc:
-        logger.warning(f"Failed to persist bot settings to user row: {exc}")
+    for key, value in settings_payload.items():
+        _set_bot_setting(key, value)
+    logger.info("Bot settings persisted to bot_settings table")
 
 
 def get_source_channel_url() -> Optional[str]:
+    val = _get_bot_setting("source_channel_url")
+    if val is not None:
+        return val
     return get_bot_settings().get("source_channel_url")
 
 
@@ -386,7 +406,9 @@ def set_source_channel_url(url: str) -> None:
 
 
 def get_uploaded_shorts_ids() -> List[str]:
-    raw = get_bot_settings().get("uploaded_shorts_ids")
+    raw = _get_bot_setting("uploaded_shorts_ids")
+    if raw is None:
+        raw = get_bot_settings().get("uploaded_shorts_ids")
     if isinstance(raw, list):
         return [str(x) for x in raw]
     if isinstance(raw, str):
