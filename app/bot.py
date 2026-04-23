@@ -52,6 +52,31 @@ from app.supabase_client import (
 )
 from app.utils import extract_video_info, validate_youtube_url
 from app.youtube_client import create_oauth_url
+from app.admin.telegram_commands import (
+    cmd_admin_create_source,
+    cmd_admin_list_sources,
+    cmd_admin_get_source,
+    cmd_admin_update_source,
+    cmd_admin_delete_source,
+    cmd_admin_connect_youtube,
+    cmd_admin_list_youtube,
+    cmd_admin_get_youtube,
+    cmd_admin_update_youtube,
+    cmd_admin_delete_youtube,
+    cmd_admin_create_mapping,
+    cmd_admin_list_mappings,
+    cmd_admin_get_mapping,
+    cmd_admin_update_mapping,
+    cmd_admin_delete_mapping,
+    cmd_admin_enqueue,
+    cmd_admin_list_uploads,
+    cmd_admin_retry_upload,
+    cmd_admin_cancel_upload,
+    cmd_admin_analytics,
+    cmd_admin_channel_perf,
+    cmd_admin_worker_status,
+    cmd_admin_audit_logs,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -490,6 +515,34 @@ async def set_bot_commands() -> None:
         BotCommand(command="admincancel", description="Cancel job: /admincancel <job_id>"),
         BotCommand(command="adminretry", description="Retry job: /adminretry <job_id>"),
         BotCommand(command="broadcast", description="Broadcast message to all users"),
+        # Admin System — Source Channels
+        BotCommand(command="admin_create_source", description="Create source channel"),
+        BotCommand(command="admin_list_sources", description="List source channels"),
+        BotCommand(command="admin_get_source", description="Get source: /admin_get_source <id>"),
+        BotCommand(command="admin_update_source", description="Update source: /admin_update_source <id> <field> <value>"),
+        BotCommand(command="admin_delete_source", description="Delete source: /admin_delete_source <id>"),
+        # Admin System — YouTube Channels
+        BotCommand(command="admin_connect_youtube", description="Connect YouTube: /admin_connect_youtube <label>"),
+        BotCommand(command="admin_list_youtube", description="List YouTube channels"),
+        BotCommand(command="admin_get_youtube", description="Get YouTube: /admin_get_youtube <id>"),
+        BotCommand(command="admin_update_youtube", description="Update YouTube: /admin_update_youtube <id> <field> <value>"),
+        BotCommand(command="admin_delete_youtube", description="Delete YouTube: /admin_delete_youtube <id>"),
+        # Admin System — Mappings
+        BotCommand(command="admin_create_mapping", description="Create mapping"),
+        BotCommand(command="admin_list_mappings", description="List mappings"),
+        BotCommand(command="admin_get_mapping", description="Get mapping: /admin_get_mapping <id>"),
+        BotCommand(command="admin_update_mapping", description="Update mapping"),
+        BotCommand(command="admin_delete_mapping", description="Delete mapping: /admin_delete_mapping <id>"),
+        # Admin System — Upload Queue
+        BotCommand(command="admin_enqueue", description="Enqueue upload: /admin_enqueue <url> <yt_id> [title]"),
+        BotCommand(command="admin_list_uploads", description="List uploads: /admin_list_uploads [status]"),
+        BotCommand(command="admin_retry_upload", description="Retry upload: /admin_retry_upload <id>"),
+        BotCommand(command="admin_cancel_upload", description="Cancel upload: /admin_cancel_upload <id>"),
+        # Admin System — Analytics
+        BotCommand(command="admin_analytics", description="System analytics overview"),
+        BotCommand(command="admin_channel_perf", description="Channel perf: /admin_channel_perf <yt_id>"),
+        BotCommand(command="admin_worker_status", description="Queue worker status"),
+        BotCommand(command="admin_audit_logs", description="Admin audit logs"),
     ]
     for admin_id in ADMIN_IDS:
         await _safe_bot_api_call(
@@ -566,7 +619,7 @@ async def cmd_help(message: types.Message):
         "/settings — view all bot settings\n"
         "/setvisibility <public|unlisted|private> — auto-upload visibility\n"
         "/settimes <HH:MM> <HH:MM> — change schedule times\n\n"
-        "🔧 Telegram Admin commands:\n"
+        "🔧 Legacy Admin commands:\n"
         "/admin — admin dashboard\n"
         "/adminhelp — admin command help\n"
         "/adminstats — system statistics\n"
@@ -578,43 +631,36 @@ async def cmd_help(message: types.Message):
         "/setplan <telegram_id> <free|paid> — set user plan\n"
         "/setlimits <free_daily> <paid_daily> <free_pending> <paid_pending> — set plan limits\n"
         "/userlookup <telegram_id> — lookup user details\n\n"
-        "🌐 Web Admin Panel (API):\n"
-        "Base URL: /admin (via FastAPI)\n\n"
-        "🔐 Auth:\n"
-        "POST /admin/auth/login — get JWT token\n"
-        "POST /admin/auth/register — create admin (super_admin only)\n"
-        "GET /admin/auth/me — current user profile\n\n"
-        "📺 Source Channels:\n"
-        "GET /admin/source-channels — list all sources\n"
-        "POST /admin/source-channels — create source (operator+)\n"
-        "PATCH /admin/source-channels/{id} — update source (operator+)\n"
-        "DELETE /admin/source-channels/{id} — delete source (admin+)\n\n"
-        "▶️ YouTube Channels:\n"
-        "POST /admin/youtube-channels/connect — start OAuth flow (operator+)\n"
-        "GET /admin/youtube-channels — list connected channels\n"
-        "PATCH /admin/youtube-channels/{id} — update channel (operator+)\n"
-        "DELETE /admin/youtube-channels/{id} — remove channel (admin+)\n\n"
-        "🔗 Mappings (Many-to-Many):\n"
-        "GET /admin/mappings — list mappings\n"
-        "POST /admin/mappings — create mapping (operator+)\n"
-        "POST /admin/mappings/bulk — bulk create mappings (operator+)\n"
-        "PATCH /admin/mappings/{id} — update mapping (operator+)\n"
-        "DELETE /admin/mappings/{id} — delete mapping (admin+)\n\n"
-        "⬆️ Upload Queue:\n"
-        "GET /admin/uploads — list queue items\n"
-        "POST /admin/uploads/enqueue — add single upload (operator+)\n"
-        "POST /admin/uploads/enqueue-bulk — add bulk uploads (operator+)\n"
-        "POST /admin/uploads/{id}/retry — retry failed item (operator+)\n"
-        "DELETE /admin/uploads/{id} — cancel pending item (admin+)\n"
-        "GET /admin/uploads/{id}/logs — view item logs\n\n"
-        "📊 Analytics:\n"
-        "GET /admin/analytics/overview — system stats\n"
-        "GET /admin/analytics/channels/{id}/performance — channel stats\n"
-        "GET /admin/audit-logs — admin action trail (admin+)\n"
-        "GET /admin/worker/status — queue worker health\n\n"
-        "💡 Features: RBAC (super_admin/admin/operator/viewer), OAuth auto-refresh, "
-        "queue-based uploads with retries, cron scheduling, rate-limiting, "
-        "Fernet-encrypted tokens, full audit logging."
+        "🆕 Admin System — Source Channels:\n"
+        "/admin_create_source <name> <url> [filter] — create source channel\n"
+        "/admin_list_sources — list all source channels\n"
+        "/admin_get_source <id> — view source channel details\n"
+        "/admin_update_source <id> <field> <value> — update source\n"
+        "/admin_delete_source <id> — delete source channel\n\n"
+        "🆕 Admin System — YouTube Channels:\n"
+        "/admin_connect_youtube <label> — connect a YouTube channel via OAuth\n"
+        "/admin_list_youtube — list connected YouTube channels\n"
+        "/admin_get_youtube <id> — view channel details\n"
+        "/admin_update_youtube <id> <field> <value> — update channel\n"
+        "/admin_delete_youtube <id> — remove YouTube channel\n\n"
+        "🆕 Admin System — Mappings (Many-to-Many):\n"
+        "/admin_create_mapping <source_id> <yt_id> [vis] [cron] — create mapping\n"
+        "/admin_list_mappings — list all mappings\n"
+        "/admin_get_mapping <id> — view mapping details\n"
+        "/admin_update_mapping <id> <field> <value> — update mapping\n"
+        "/admin_delete_mapping <id> — delete mapping\n\n"
+        "🆕 Admin System — Upload Queue:\n"
+        "/admin_enqueue <url> <yt_id> [title] — enqueue an upload\n"
+        "/admin_list_uploads [status] — list queue items\n"
+        "/admin_retry_upload <id> — retry a failed upload\n"
+        "/admin_cancel_upload <id> — cancel a pending upload\n\n"
+        "🆕 Admin System — Analytics:\n"
+        "/admin_analytics — system overview stats\n"
+        "/admin_channel_perf <yt_id> — per-channel performance\n"
+        "/admin_worker_status — queue worker health\n"
+        "/admin_audit_logs — admin action trail\n\n"
+        "💡 Features: RBAC, OAuth auto-refresh, queue-based uploads with retries, "
+        "cron scheduling, rate-limiting, Fernet-encrypted tokens, full audit logging."
     )
 
 
@@ -827,7 +873,7 @@ async def cmd_adminhelp(message: types.Message):
         await message.reply("Access denied.")
         return
     await message.reply(
-        "Admin commands:\n"
+        "🔧 Legacy Admin commands:\n"
         "/admin - Open admin dashboard\n"
         "/setplan <telegram_id> <free|paid>\n"
         "/setlimits <free_daily> <paid_daily> <free_pending> <paid_pending>\n"
@@ -837,7 +883,35 @@ async def cmd_adminhelp(message: types.Message):
         "/adminjobs - Show recent jobs\n"
         "/admincancel <job_id> - Cancel draft/pending job\n"
         "/adminretry <job_id> - Requeue failed/draft/pending job\n"
-        "/broadcast - Start broadcast mode"
+        "/broadcast - Start broadcast mode\n\n"
+        "🆕 Admin System — Source Channels:\n"
+        "/admin_create_source <name> <url> [filter]\n"
+        "/admin_list_sources\n"
+        "/admin_get_source <id>\n"
+        "/admin_update_source <id> <field> <value>\n"
+        "/admin_delete_source <id>\n\n"
+        "🆕 Admin System — YouTube Channels:\n"
+        "/admin_connect_youtube <label>\n"
+        "/admin_list_youtube\n"
+        "/admin_get_youtube <id>\n"
+        "/admin_update_youtube <id> <field> <value>\n"
+        "/admin_delete_youtube <id>\n\n"
+        "🆕 Admin System — Mappings:\n"
+        "/admin_create_mapping <source_id> <yt_id> [vis] [cron]\n"
+        "/admin_list_mappings\n"
+        "/admin_get_mapping <id>\n"
+        "/admin_update_mapping <id> <field> <value>\n"
+        "/admin_delete_mapping <id>\n\n"
+        "🆕 Admin System — Upload Queue:\n"
+        "/admin_enqueue <url> <yt_id> [title]\n"
+        "/admin_list_uploads [status]\n"
+        "/admin_retry_upload <id>\n"
+        "/admin_cancel_upload <id>\n\n"
+        "🆕 Admin System — Analytics:\n"
+        "/admin_analytics\n"
+        "/admin_channel_perf <yt_id>\n"
+        "/admin_worker_status\n"
+        "/admin_audit_logs"
     )
 
 
@@ -2219,7 +2293,7 @@ def register_handlers() -> None:
     dp.message.register(cmd_setvisibility, Command("setvisibility"))
     dp.message.register(cmd_settimes, Command("settimes"))
 
-    # Admin commands
+    # Admin commands (legacy)
     dp.message.register(cmd_admin, Command("admin"))
     dp.message.register(cmd_adminhelp, Command("adminhelp"))
     dp.message.register(cmd_adminstats, Command("adminstats"))
@@ -2228,6 +2302,39 @@ def register_handlers() -> None:
     dp.message.register(cmd_admincancel, Command("admincancel"))
     dp.message.register(cmd_adminretry, Command("adminretry"))
     dp.message.register(cmd_broadcast, Command("broadcast"))
+
+    # Admin System - Source Channels
+    dp.message.register(cmd_admin_create_source, Command("admin_create_source"))
+    dp.message.register(cmd_admin_list_sources, Command("admin_list_sources"))
+    dp.message.register(cmd_admin_get_source, Command("admin_get_source"))
+    dp.message.register(cmd_admin_update_source, Command("admin_update_source"))
+    dp.message.register(cmd_admin_delete_source, Command("admin_delete_source"))
+
+    # Admin System - YouTube Channels
+    dp.message.register(cmd_admin_connect_youtube, Command("admin_connect_youtube"))
+    dp.message.register(cmd_admin_list_youtube, Command("admin_list_youtube"))
+    dp.message.register(cmd_admin_get_youtube, Command("admin_get_youtube"))
+    dp.message.register(cmd_admin_update_youtube, Command("admin_update_youtube"))
+    dp.message.register(cmd_admin_delete_youtube, Command("admin_delete_youtube"))
+
+    # Admin System - Mappings
+    dp.message.register(cmd_admin_create_mapping, Command("admin_create_mapping"))
+    dp.message.register(cmd_admin_list_mappings, Command("admin_list_mappings"))
+    dp.message.register(cmd_admin_get_mapping, Command("admin_get_mapping"))
+    dp.message.register(cmd_admin_update_mapping, Command("admin_update_mapping"))
+    dp.message.register(cmd_admin_delete_mapping, Command("admin_delete_mapping"))
+
+    # Admin System - Upload Queue
+    dp.message.register(cmd_admin_enqueue, Command("admin_enqueue"))
+    dp.message.register(cmd_admin_list_uploads, Command("admin_list_uploads"))
+    dp.message.register(cmd_admin_retry_upload, Command("admin_retry_upload"))
+    dp.message.register(cmd_admin_cancel_upload, Command("admin_cancel_upload"))
+
+    # Admin System - Analytics
+    dp.message.register(cmd_admin_analytics, Command("admin_analytics"))
+    dp.message.register(cmd_admin_channel_perf, Command("admin_channel_perf"))
+    dp.message.register(cmd_admin_worker_status, Command("admin_worker_status"))
+    dp.message.register(cmd_admin_audit_logs, Command("admin_audit_logs"))
 
     # FSM handlers
     dp.message.register(process_title, DownloadState.waiting_title)
