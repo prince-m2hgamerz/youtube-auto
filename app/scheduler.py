@@ -4,14 +4,20 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+import requests
+
 from app.channel_copier import process_source_channel_uploads
 from app.supabase_client import get_bot_settings, set_bot_settings
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 _scheduler_thread: threading.Thread | None = None
+_self_ping_thread: threading.Thread | None = None
 
 DEFAULT_TIMES = "07:15,19:15"
 SLEEP_INTERVAL = 60  # wake up every minute to survive Railway free-tier sleeps
+SELF_PING_INTERVAL = 180  # ping own health endpoint every 3 minutes
+
 
 
 def _parse_schedule_times() -> list[tuple[int, int]]:
@@ -80,11 +86,32 @@ def _scheduler_loop():
         time.sleep(SLEEP_INTERVAL)
 
 
+def _self_ping_loop():
+    base_url = str(settings.base_url or "http://localhost:8000").rstrip("/")
+    ping_url = f"{base_url}/health"
+    logger.info(f"Self-ping loop started — targeting {ping_url}")
+    while True:
+        try:
+            requests.get(ping_url, timeout=10)
+            logger.debug("Self-ping OK")
+        except Exception as exc:
+            logger.warning(f"Self-ping failed: {exc}")
+        time.sleep(SELF_PING_INTERVAL)
+
+
 def start_scheduler():
-    global _scheduler_thread
+    global _scheduler_thread, _self_ping_thread
+
     if _scheduler_thread and _scheduler_thread.is_alive():
         logger.info("Scheduler already running")
-        return
-    _scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True)
-    _scheduler_thread.start()
-    logger.info("Scheduler thread started")
+    else:
+        _scheduler_thread = threading.Thread(target=_scheduler_loop, daemon=True)
+        _scheduler_thread.start()
+        logger.info("Scheduler thread started")
+
+    if _self_ping_thread and _self_ping_thread.is_alive():
+        logger.info("Self-ping already running")
+    else:
+        _self_ping_thread = threading.Thread(target=_self_ping_loop, daemon=True)
+        _self_ping_thread.start()
+        logger.info("Self-ping thread started")
