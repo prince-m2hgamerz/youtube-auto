@@ -14,7 +14,7 @@ ALTER TABLE bot_settings DISABLE ROW LEVEL SECURITY;
 -- Insert default settings
 INSERT INTO bot_settings (setting_name, setting_value)
 VALUES 
-    ('source_channel_url', NULL),
+    ('source_channels', '[]'),
     ('auto_upload_visibility', 'public'),
     ('auto_upload_times', '07:15,19:15'),
     ('uploaded_shorts_ids', '[]'),
