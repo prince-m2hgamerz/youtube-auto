@@ -1,19 +1,21 @@
+import json
 import logging
 import threading
 import time
 from datetime import datetime, timedelta
 
 from app.channel_copier import process_source_channel_uploads
-from app.supabase_client import get_app_settings
+from app.supabase_client import get_bot_settings, set_bot_settings
 
 logger = logging.getLogger(__name__)
 _scheduler_thread: threading.Thread | None = None
 
 DEFAULT_TIMES = "07:15,19:15"
+SLEEP_INTERVAL = 60  # wake up every minute to survive Railway free-tier sleeps
 
 
 def _parse_schedule_times() -> list[tuple[int, int]]:
-    s = get_app_settings()
+    s = get_bot_settings()
     raw = s.get("auto_upload_times", DEFAULT_TIMES) if s else DEFAULT_TIMES
     if isinstance(raw, list) and len(raw) == 2:
         return [(int(raw[0][0]), int(raw[0][1])), (int(raw[1][0]), int(raw[1][1]))]
@@ -31,12 +33,36 @@ def _parse_schedule_times() -> list[tuple[int, int]]:
     return [(7, 15), (19, 15)]
 
 
-def _seconds_until(hour: int, minute: int) -> float:
+def _get_last_run_dates() -> dict[str, str]:
+    s = get_bot_settings()
+    raw = s.get("scheduler_last_runs", "{}")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return {}
+
+
+def _set_last_run(time_key: str) -> None:
+    runs = _get_last_run_dates()
+    runs[time_key] = datetime.now().strftime("%Y-%m-%d")
+    set_bot_settings({"scheduler_last_runs": runs})
+
+
+def _should_run_now(hour: int, minute: int) -> bool:
     now = datetime.now()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return (target - now).total_seconds()
+    # Only run if current time is within the target minute window
+    if now.hour != hour or now.minute != minute:
+        return False
+    time_key = f"{hour:02d}:{minute:02d}"
+    last_runs = _get_last_run_dates()
+    today = now.strftime("%Y-%m-%d")
+    if last_runs.get(time_key) == today:
+        return False  # already ran today
+    return True
 
 
 def _scheduler_loop():
@@ -44,13 +70,14 @@ def _scheduler_loop():
     while True:
         times = _parse_schedule_times()
         for hour, minute in times:
-            sleep_seconds = _seconds_until(hour, minute)
-            logger.info(f"Scheduler sleeping {sleep_seconds / 60:.1f} minutes until {hour:02d}:{minute:02d}")
-            time.sleep(sleep_seconds)
-            try:
-                process_source_channel_uploads()
-            except Exception as exc:
-                logger.error(f"Scheduled upload ({hour:02d}:{minute:02d}) failed: {exc}", exc_info=True)
+            if _should_run_now(hour, minute):
+                logger.info(f"Triggering scheduled upload for {hour:02d}:{minute:02d}")
+                try:
+                    process_source_channel_uploads()
+                    _set_last_run(f"{hour:02d}:{minute:02d}")
+                except Exception as exc:
+                    logger.error(f"Scheduled upload ({hour:02d}:{minute:02d}) failed: {exc}", exc_info=True)
+        time.sleep(SLEEP_INTERVAL)
 
 
 def start_scheduler():
